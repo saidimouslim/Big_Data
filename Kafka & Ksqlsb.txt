@@ -1,0 +1,107 @@
+CREATE TYPE season_length AS STRUCT<season_id INT, episode_count INT> ;
+CREATE TABLE titles (
+ id INT PRIMARY KEY,
+ title VARCHAR
+) WITH (
+ KAFKA_TOPIC='titles',
+ VALUE_FORMAT='JSON',
+ PARTITIONS=4
+);
+CREATE STREAM production_changes (
+2
+ rowkey VARCHAR KEY,
+ title_id INT,
+ change_type VARCHAR,
+ before season_length,
+ after season_length,
+ created_at VARCHAR
+) WITH (
+ KAFKA_TOPIC='production_changes',
+ PARTITIONS='4',
+ VALUE_FORMAT='JSON',
+ TIMESTAMP='created_at',
+ TIMESTAMP_FORMAT='yyyy-MM-dd HH:mm:ss'
+);
+INSERT INTO production_changes (
+title_id,
+change_type,
+before,
+after,
+created_at
+) VALUES (
+1,
+'season_length',
+STRUCT(season_id := 1, episode_count := 12),
+STRUCT(season_id := 1, episode_count := 8),
+'2021-02-08 10:00:00'
+3
+);
+INSERT INTO titles VALUES (1, 'Stranger Things');
+INSERT INTO titles VALUES (2, 'Black Mirror');
+INSERT INTO titles VALUES (3, 'Bojack Horseman');
+SELECT *
+FROM production_changes
+WHERE STRINGTOTIMESTAMP(created_at, 'yyyy-MM-dd HH:mm:ss') < 
+STRINGTOTIMESTAMP('2023-04-14 12:00:00', 'yyyy-MM-dd HH:mm:ss')
+EMIT CHANGES ;
+SELECT *
+FROM production_changes
+WHERE change_type LIKE 'season%'
+EMIT CHANGES ;
+CREATE STREAM season_length_changes
+WITH (
+KAFKA_TOPIC = 'season_length_changes',
+VALUE_FORMAT = 'JSON',
+PARTITIONS = 4,
+REPLICAS = 1
+) AS SELECT
+4
+ROWKEY,
+title_id,
+IFNULL(after->season_id, before->season_id) AS season_id,
+before->episode_count AS old_episode_count,
+after->episode_count AS new_episode_count,
+created_at
+FROM production_changes
+WHERE change_type = 'season_length'
+EMIT CHANGES ;
+SELECT title
+FROM season_length_changes s
+INNER JOIN titles t
+ON s.title_id = t.id
+EMIT CHANGES ;
+CREATE STREAM season_length_changes_enriched
+WITH (
+ KAFKA_TOPIC = 'season_length_changes_enriched',
+ VALUE_FORMAT = 'JSON',
+ PARTITIONS = 4,
+ TIMESTAMP='created_at',
+ TIMESTAMP_FORMAT='yyyy-MM-dd HH:mm:ss'
+) AS
+SELECT
+s.rowkey,
+ s.title_id,
+ t.title,
+5
+ s.season_id,
+ s.old_episode_count,
+ s.new_episode_count,
+ s.created_at
+FROM season_length_changes s
+INNER JOIN titles t
+ON s.title_id = t.id
+EMIT CHANGES ;
+CREATE TABLE season_length_change_counts
+WITH (
+ KAFKA_TOPIC = 'season_length_change_counts',
+ VALUE_FORMAT = 'JSON',
+ PARTITIONS = 1
+) AS
+SELECT
+ title_id,
+ COUNT(*) AS change_count,
+ LATEST_BY_OFFSET(new_episode_count) AS episode_count
+FROM season_length_changes_enriched
+WINDOW TUMBLING (SIZE 1 HOUR)
+GROUP BY title_id
+EMIT CHANGES ;

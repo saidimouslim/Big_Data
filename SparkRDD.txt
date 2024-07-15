@@ -1,0 +1,14 @@
+Docker cp arbre.py spark-master:/usr/local/spark/arbre.py
+
+docker cp expython.py spark-master:/usr/local/spark/expython.py
+
+#docker cp expython.py shadoop-master:/user/root/expython.py
+
+hadoop fs –put expython.py input
+
+hadoop jar $HADOOP_HOME/share/hadoop/common/hadoop-streaming.jar \
+-input /input \
+-output output \
+-mapper expython.py \
+-reducer expython.py \
+-file expython.py
